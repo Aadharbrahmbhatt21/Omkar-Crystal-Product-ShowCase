@@ -294,6 +294,12 @@
                                     </svg>
                                     Delete
                                 </button>
+                                <button id="editProductBtn" class="hidden bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-xl transition shadow-lg hover:shadow-xl font-semibold text-sm flex items-center gap-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                    </svg>
+                                    Edit
+                                </button>
                             </div>
                             <h1 id="detailProductName" class="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-800 mb-4 sm:mb-6 leading-tight"></h1>
                         </div>
@@ -448,6 +454,9 @@
         let currentProductImages = [];
         let currentImageIndex = 0;
         let additionalImageFiles = [];
+        let isEditMode = false;
+        let editingProductId = null;
+        let existingImages = [];
 
         const loginPage = document.getElementById('loginPage');
         const mainContent = document.getElementById('mainContent');
@@ -540,6 +549,21 @@
         });
 
         addNewBtn.addEventListener('click', () => {
+            isEditMode = false;
+            editingProductId = null;
+            existingImages = [];
+            document.querySelector('#addProductModal h2').innerHTML = `
+                <svg class="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                </svg>
+                Add New Product
+            `;
+            document.getElementById('submitProduct').innerHTML = `
+                <svg class="w-5 h-5 sm:w-6 sm:h-6 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span>Add Product</span>
+            `;
             addProductModal.classList.remove('hidden');
             document.body.style.overflow = 'hidden';
         });
@@ -556,6 +580,9 @@
             document.getElementById('imagesPreview').classList.add('hidden');
             document.getElementById('imagesPreview').innerHTML = '';
             additionalImageFiles = [];
+            isEditMode = false;
+            editingProductId = null;
+            existingImages = [];
         }
 
         // Close modal on background click
@@ -655,39 +682,89 @@
             progressDiv.classList.remove('hidden');
 
             try {
-                const heroFile = document.getElementById('heroImage').files[0];
                 const name = document.getElementById('productName').value;
                 const description = document.getElementById('productDescription').value;
+                let imageURLs = [];
 
-                progressText.textContent = 'Uploading hero image...';
-                const heroRef = storage.ref(`products/${Date.now()}_hero_${heroFile.name}`);
-                await heroRef.put(heroFile);
-                const heroURL = await heroRef.getDownloadURL();
-                progressBar.style.width = '30%';
+                if (isEditMode) {
+                    // Edit mode - keep existing images
+                    imageURLs = [...existingImages];
+                    progressBar.style.width = '30%';
 
-                const imageURLs = [heroURL];
-                
-                if (additionalImageFiles.length > 0) {
-                    const total = additionalImageFiles.length;
-                    for (let i = 0; i < total; i++) {
-                        progressText.textContent = `${Math.round(30 + ((i + 1) / total) * 50)}%`;
-                        const ref = storage.ref(`products/${Date.now()}_add_${i}_${additionalImageFiles[i].name}`);
-                        await ref.put(additionalImageFiles[i]);
-                        const url = await ref.getDownloadURL();
-                        imageURLs.push(url);
-                        progressBar.style.width = `${30 + ((i + 1) / total) * 50}%`;
+                    // Upload new hero image if changed
+                    const heroFile = document.getElementById('heroImage').files[0];
+                    if (heroFile) {
+                        progressText.textContent = 'Uploading new hero image...';
+                        // Delete old hero image
+                        if (existingImages[0]) {
+                            try {
+                                const oldRef = storage.refFromURL(existingImages[0]);
+                                await oldRef.delete();
+                            } catch (error) {
+                                console.log('Error deleting old hero:', error);
+                            }
+                        }
+                        const heroRef = storage.ref(`products/${Date.now()}_hero_${heroFile.name}`);
+                        await heroRef.put(heroFile);
+                        const heroURL = await heroRef.getDownloadURL();
+                        imageURLs[0] = heroURL;
                     }
-                }
 
-                progressText.textContent = '90%';
-                await db.collection('products').add({
-                    heroImageURL: heroURL,
-                    productName: name,
-                    description: description,
-                    images: imageURLs,
-                    uploadedBy: currentUser,
-                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
-                });
+                    // Upload new additional images
+                    if (additionalImageFiles.length > 0) {
+                        const total = additionalImageFiles.length;
+                        for (let i = 0; i < total; i++) {
+                            progressText.textContent = `${Math.round(30 + ((i + 1) / total) * 50)}%`;
+                            const ref = storage.ref(`products/${Date.now()}_add_${i}_${additionalImageFiles[i].name}`);
+                            await ref.put(additionalImageFiles[i]);
+                            const url = await ref.getDownloadURL();
+                            imageURLs.push(url);
+                            progressBar.style.width = `${30 + ((i + 1) / total) * 50}%`;
+                        }
+                    }
+
+                    progressText.textContent = '90%';
+                    await db.collection('products').doc(editingProductId).update({
+                        productName: name,
+                        description: description,
+                        images: imageURLs,
+                        heroImageURL: imageURLs[0],
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+
+                } else {
+                    // Add mode - new product
+                    const heroFile = document.getElementById('heroImage').files[0];
+                    progressText.textContent = 'Uploading hero image...';
+                    const heroRef = storage.ref(`products/${Date.now()}_hero_${heroFile.name}`);
+                    await heroRef.put(heroFile);
+                    const heroURL = await heroRef.getDownloadURL();
+                    progressBar.style.width = '30%';
+
+                    imageURLs = [heroURL];
+                    
+                    if (additionalImageFiles.length > 0) {
+                        const total = additionalImageFiles.length;
+                        for (let i = 0; i < total; i++) {
+                            progressText.textContent = `${Math.round(30 + ((i + 1) / total) * 50)}%`;
+                            const ref = storage.ref(`products/${Date.now()}_add_${i}_${additionalImageFiles[i].name}`);
+                            await ref.put(additionalImageFiles[i]);
+                            const url = await ref.getDownloadURL();
+                            imageURLs.push(url);
+                            progressBar.style.width = `${30 + ((i + 1) / total) * 50}%`;
+                        }
+                    }
+
+                    progressText.textContent = '90%';
+                    await db.collection('products').add({
+                        heroImageURL: heroURL,
+                        productName: name,
+                        description: description,
+                        images: imageURLs,
+                        uploadedBy: currentUser,
+                        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                }
 
                 progressBar.style.width = '100%';
                 progressText.textContent = '100%';
@@ -705,13 +782,18 @@
                     `;
                     additionalImageFiles = [];
                     loadProducts();
+                    
+                    if (detailsPage.classList.contains('hidden') === false) {
+                        detailsPage.classList.add('hidden');
+                        homePage.classList.remove('hidden');
+                    }
                 }, 1000);
 
             } catch (error) {
                 console.error('Error:', error);
-                alert('Error adding product. Please try again.');
+                alert('Error saving product. Please try again.');
                 submitBtn.disabled = false;
-                submitBtn.innerHTML = 'Add Product';
+                submitBtn.innerHTML = isEditMode ? 'Update Product' : 'Add Product';
                 progressDiv.classList.add('hidden');
             }
         });
@@ -780,6 +862,13 @@
                                 by ${product.uploadedBy}
                             </div>
                             ${product.uploadedBy === currentUser ? `
+                                <button onclick="editProduct('${product.id}', event)" 
+                                        class="bg-blue-500 hover:bg-blue-600 text-white p-2 rounded-lg transition shadow-md hover:shadow-lg transform hover:scale-105 mr-2"
+                                        title="Edit product">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                    </svg>
+                                </button>
                                 <button onclick="deleteProduct('${product.id}', event)" 
                                         class="bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg transition shadow-md hover:shadow-lg transform hover:scale-105"
                                         title="Delete product">
@@ -805,13 +894,19 @@
             document.getElementById('detailDescription').textContent = product.description;
             document.getElementById('detailUploader').textContent = product.uploadedBy;
 
-            // Show/hide delete button based on ownership
+            // Show/hide edit and delete buttons based on ownership
             const deleteBtn = document.getElementById('deleteProductBtn');
+            const editBtn = document.getElementById('editProductBtn');
+            
             if (product.uploadedBy === currentUser) {
                 deleteBtn.classList.remove('hidden');
                 deleteBtn.onclick = () => deleteProductFromDetails(product.id);
+                
+                editBtn.classList.remove('hidden');
+                editBtn.onclick = () => editProductFromDetails(product);
             } else {
                 deleteBtn.classList.add('hidden');
+                editBtn.classList.add('hidden');
             }
 
             currentProductImages = product.images;
@@ -819,6 +914,135 @@
             displayProductImage();
             createThumbnails();
         }
+
+        // Edit product from card view
+        window.editProduct = async function(productId, event) {
+            event.stopPropagation();
+            
+            try {
+                const doc = await db.collection('products').doc(productId).get();
+                const product = { id: doc.id, ...doc.data() };
+                
+                openEditModal(product);
+            } catch (error) {
+                console.error('Error loading product:', error);
+                alert('Error loading product. Please try again.');
+            }
+        };
+
+        // Edit product from details view
+        function editProductFromDetails(product) {
+            openEditModal(product);
+        }
+
+        // Open modal in edit mode
+        function openEditModal(product) {
+            isEditMode = true;
+            editingProductId = product.id;
+            existingImages = [...product.images];
+
+            // Update modal title and button
+            document.querySelector('#addProductModal h2').innerHTML = `
+                <svg class="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                </svg>
+                Edit Product
+            `;
+            
+            document.getElementById('submitProduct').innerHTML = `
+                <svg class="w-5 h-5 sm:w-6 sm:h-6 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span>Update Product</span>
+            `;
+
+            // Fill form with existing data
+            document.getElementById('productName').value = product.productName;
+            document.getElementById('productDescription').value = product.description;
+
+            // Show hero image preview
+            const heroPreview = document.getElementById('heroPreview');
+            heroPreview.querySelector('img').src = product.heroImageURL;
+            heroPreview.classList.remove('hidden');
+
+            // Make hero image optional in edit mode
+            document.getElementById('heroImage').required = false;
+
+            // Show existing additional images
+            const imagesPreview = document.getElementById('imagesPreview');
+            imagesPreview.innerHTML = '';
+            
+            if (product.images.length > 1) {
+                imagesPreview.classList.remove('hidden');
+                product.images.slice(1).forEach((img, index) => {
+                    const container = document.createElement('div');
+                    container.className = 'image-preview-item relative bg-white rounded-xl overflow-hidden shadow-lg border-2 border-purple-200';
+                    container.style.paddingBottom = '100%';
+                    
+                    container.innerHTML = `
+                        <img src="${img}" alt="Existing ${index + 1}" class="absolute inset-0 w-full h-full object-contain p-2">
+                        <div class="delete-overlay">
+                            <button type="button" class="bg-red-500 hover:bg-red-600 text-white p-2 sm:p-3 rounded-full shadow-xl transition transform hover:scale-110" onclick="removeExistingImage(${index + 1})">
+                                <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                </svg>
+                            </button>
+                        </div>
+                    `;
+                    
+                    imagesPreview.appendChild(container);
+                });
+            }
+
+            // Open modal
+            addProductModal.classList.remove('hidden');
+            document.body.style.overflow = 'hidden';
+        }
+
+        // Remove existing image from edit
+        window.removeExistingImage = async function(index) {
+            if (!confirm('Remove this image?')) return;
+
+            try {
+                // Delete from storage
+                const imageUrl = existingImages[index];
+                const imageRef = storage.refFromURL(imageUrl);
+                await imageRef.delete();
+
+                // Remove from array
+                existingImages.splice(index, 1);
+
+                // Update UI
+                const imagesPreview = document.getElementById('imagesPreview');
+                imagesPreview.innerHTML = '';
+                
+                if (existingImages.length > 1) {
+                    existingImages.slice(1).forEach((img, idx) => {
+                        const container = document.createElement('div');
+                        container.className = 'image-preview-item relative bg-white rounded-xl overflow-hidden shadow-lg border-2 border-purple-200';
+                        container.style.paddingBottom = '100%';
+                        
+                        container.innerHTML = `
+                            <img src="${img}" alt="Existing ${idx + 1}" class="absolute inset-0 w-full h-full object-contain p-2">
+                            <div class="delete-overlay">
+                                <button type="button" class="bg-red-500 hover:bg-red-600 text-white p-2 sm:p-3 rounded-full shadow-xl transition transform hover:scale-110" onclick="removeExistingImage(${idx + 1})">
+                                    <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        `;
+                        
+                        imagesPreview.appendChild(container);
+                    });
+                } else {
+                    imagesPreview.classList.add('hidden');
+                }
+            } catch (error) {
+                console.error('Error removing image:', error);
+                alert('Error removing image.');
+            }
+        };
 
         // Delete product from card view
         window.deleteProduct = async function(productId, event) {
